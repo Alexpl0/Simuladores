@@ -2,7 +2,7 @@ import tkinter as tk
 import threading
 import random
 import time
-from tkinter import ttk  # Importar ttk para usar Progressbar
+from tkinter import ttk  # Importar ttk para usar Progressbar y Treeview
 from matplotlib.figure import Figure  # Importar Figure para la gráfica
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg  # Integrar matplotlib con tkinter
 
@@ -35,6 +35,9 @@ class Proceso:
         self.nucleo = None
         self.hilo = None
         self.memoria_asignada = 0
+        
+        # Ciclos realizados
+        self.ciclos_realizados = 0  # Inicialmente 0
         
     def simular_proceso(self):
         """
@@ -73,6 +76,10 @@ class SimuladorProcesador:
         # Lock para controlar el acceso al estado "Ejecutando"
         self.lock_ejecucion = threading.Lock()
         
+        # Evento para controlar pausa y reanudación
+        self.pausa_event = threading.Event()
+        self.pausa_event.set()  # Inicialmente no está en pausa
+        
         # Configuración de la ventana principal
         self.root = tk.Tk()
         self.root.title("Simulador de Procesos de Procesador")
@@ -104,6 +111,33 @@ class SimuladorProcesador:
             command=self.iniciar_simulacion
         )
         self.boton_iniciar.pack(pady=10)
+        
+        # Botón para pausar la simulación
+        self.boton_pausa = tk.Button(
+            self.root,
+            text="Pausar Simulación",
+            command=self.pausar_simulacion
+        )
+        self.boton_pausa.pack(pady=5)
+        
+        # Botón para continuar la simulación
+        self.boton_continuar = tk.Button(
+            self.root,
+            text="Continuar Simulación",
+            command=self.continuar_simulacion
+        )
+        self.boton_continuar.pack(pady=5)
+
+        # Contador de procesos terminados
+        self.procesos_terminados = 0
+
+        # Tabla para mostrar resultados finales (inicialmente oculta)
+        self.treeview = ttk.Treeview(self.root, columns=("ID", "Ciclos", "Tiempo Estimado", "Tiempo Real"), show="headings")
+        self.treeview.heading("ID", text="ID")
+        self.treeview.heading("Ciclos", text="Ciclos Realizados")
+        self.treeview.heading("Tiempo Estimado", text="Tiempo Estimado (s)")
+        self.treeview.heading("Tiempo Real", text="Tiempo Real (s)")
+        self.treeview.pack_forget()  # Ocultar la tabla al inicio
     
     def crear_procesos(self, num_procesos):
         """
@@ -195,6 +229,24 @@ class SimuladorProcesador:
             )
             thread.start()
 
+    def pausar_simulacion(self):
+        """
+        Pausa la simulación deteniendo los hilos temporalmente
+        """
+        self.pausa_event.clear()  # Detiene los hilos
+        for i, proceso in enumerate(self.procesos):
+            if proceso.estados['Ejecutando'] or proceso.estados['Bloqueado']:
+                self.labels_estados[i].config(
+                    text=f"Proceso {proceso.id}: Pausado (Ciclos realizados: {proceso.ciclo_ejecucion})"
+                )
+        self.actualizar_grafica()  # Actualiza la gráfica en el momento de la pausa
+    
+    def continuar_simulacion(self):
+        """
+        Continúa la simulación reanudando los hilos
+        """
+        self.pausa_event.set()  # Permite que los hilos continúen
+
     def actualizar_grafica(self):
         """
         Actualiza la gráfica con los tiempos de ejecución de los procesos en tiempo real
@@ -254,6 +306,30 @@ class SimuladorProcesador:
         
         # Actualizar el canvas
         self.canvas.draw()
+
+    def actualizar_tabla(self):
+        """
+        Actualiza la tabla con los resultados finales de los procesos
+        """
+        # Limpiar la tabla antes de llenarla
+        for row in self.treeview.get_children():
+            self.treeview.delete(row)
+
+        # Llenar la tabla con los datos de los procesos
+        for proceso in self.procesos:
+            tiempo_real = getattr(proceso, 'tiempo_ejecucion_real', 0)
+            self.treeview.insert(
+                "", "end",
+                values=(
+                    proceso.id,
+                    proceso.ciclos_realizados,  # Usar ciclos realizados realmente
+                    f"{proceso.tiempo_ejecucion:.2f}",
+                    f"{tiempo_real:.2f}"
+                )
+            )
+
+        # Mostrar la tabla al finalizar todas las simulaciones
+        self.treeview.pack(pady=10)
     
     def simular_proceso_con_actualizacion(self, proceso, index):
         """
@@ -264,125 +340,61 @@ class SimuladorProcesador:
             proceso (Proceso): Proceso a simular
             index (int): Índice del proceso para actualizar etiqueta
         """
-        # Inicializar tiempo acumulado de ejecución
         tiempo_final_acumulado = 0
         tiempo_estimado_total = proceso.tiempo_ejecucion
         
-        # Establecer el proceso como Nuevo
-        for key in proceso.estados:
-            proceso.estados[key] = False
-        proceso.estados['Nuevo'] = True
-        
-        # Actualizar la interfaz para el estado Nuevo
-        self.labels_estados[index].config(text=f"Proceso {proceso.id}: Nuevo")
-        self.progress_bars[index]['value'] = 1
-        self.info_labels[index].config(
-            text=f"Prioridad: {proceso.prioridad} | Memoria: {proceso.memoria_asignada} MB | "
-                 f"Hilo: {proceso.hilo} | Núcleo: {proceso.nucleo} | "
-                 f"Tiempo estimado: {tiempo_estimado_total:.2f} s"
-        )
-        self.root.update_idletasks()
-        time.sleep(random.uniform(0.5, 1))
-        
-        # Cambiar a estado Listo
-        for key in proceso.estados:
-            proceso.estados[key] = False
-        proceso.estados['Listo'] = True
-        
-        # Actualizar la interfaz para el estado Listo
-        self.labels_estados[index].config(text=f"Proceso {proceso.id}: Listo")
-        self.progress_bars[index]['value'] = 2
-        self.root.update_idletasks()
-        time.sleep(random.uniform(0.5, 1))
-        
-        # Determinar cuántos ciclos de ejecución-bloqueo habrá (entre 2 y 4)
-        num_ciclos = random.randint(2, 4)
-        
-        # Calcular el tiempo por ciclo dividiendo el tiempo total estimado
+        # Establecer un número aleatorio de ciclos entre 20 y 30
+        num_ciclos = random.randint(20, 30)
         tiempo_por_ciclo = tiempo_estimado_total / num_ciclos
         
-        # Realizar ciclos alternados de Ejecutando y Bloqueado
         for ciclo in range(num_ciclos):
-            # Estado Ejecutando
-            for key in proceso.estados:
-                proceso.estados[key] = False
-            proceso.estados['Ejecutando'] = True
+            # Pausar si el evento está detenido
+            self.pausa_event.wait()
             
-            # Actualizar la interfaz para el estado Ejecutando
+            # Estado Ejecutando
+            proceso.estados['Ejecutando'] = True
             self.labels_estados[index].config(
                 text=f"Proceso {proceso.id}: Ejecutando (Ciclo {ciclo+1}/{num_ciclos})"
             )
             self.progress_bars[index]['value'] = 3
-            self.info_labels[index].config(
-                text=f"Prioridad: {proceso.prioridad} | Memoria: {proceso.memoria_asignada} MB | "
-                     f"Hilo: {proceso.hilo} | Núcleo: {proceso.nucleo} | "
-                     f"Tiempo estimado: {tiempo_estimado_total:.2f} s | "
-                     f"Progreso: {(tiempo_final_acumulado/tiempo_estimado_total)*100:.1f}%"
-            )
             self.root.update_idletasks()
             
-            # Ajustar el tiempo de ejecución según la prioridad
             tiempo_actual = tiempo_por_ciclo / proceso.prioridad
             start_time = time.time()
             time.sleep(tiempo_actual)
             tiempo_ciclo = time.time() - start_time
             tiempo_final_acumulado += tiempo_ciclo
             
-            # Si es el último ciclo, no entrar a estado bloqueado
+            # Incrementar el contador de ciclos realizados
+            proceso.ciclos_realizados += 1
+
+            # Estado Bloqueado
             if ciclo < num_ciclos - 1:
-                # Estado Bloqueado
-                for key in proceso.estados:
-                    proceso.estados[key] = False
+                self.pausa_event.wait()
                 proceso.estados['Bloqueado'] = True
-                
-                # Actualizar la interfaz para el estado Bloqueado
                 self.labels_estados[index].config(
                     text=f"Proceso {proceso.id}: Bloqueado (Después del ciclo {ciclo+1})"
                 )
                 self.progress_bars[index]['value'] = 4
-                self.info_labels[index].config(
-                    text=f"Prioridad: {proceso.prioridad} | Memoria: {proceso.memoria_asignada} MB | "
-                         f"Hilo: {proceso.hilo} | Núcleo: {proceso.nucleo} | "
-                         f"Tiempo estimado: {tiempo_estimado_total:.2f} s | "
-                         f"Progreso: {(tiempo_final_acumulado/tiempo_estimado_total)*100:.1f}%"
-                )
                 self.root.update_idletasks()
-                
-                # Bloqueo por un tiempo aleatorio corto
                 time.sleep(random.uniform(0.3, 1))
-                
-                # Volver al estado Listo antes del siguiente ciclo de ejecución
-                for key in proceso.estados:
-                    proceso.estados[key] = False
-                proceso.estados['Listo'] = True
-                
-                # Actualizar la interfaz para el estado Listo intermedio
-                self.labels_estados[index].config(
-                    text=f"Proceso {proceso.id}: Listo (Para ciclo {ciclo+2})"
-                )
-                self.progress_bars[index]['value'] = 2
-                self.root.update_idletasks()
-                time.sleep(random.uniform(0.2, 0.5))
         
         # Estado Terminado
-        for key in proceso.estados:
-            proceso.estados[key] = False
         proceso.estados['Terminado'] = True
-        
-        # Actualizar la interfaz para el estado Terminado
-        self.labels_estados[index].config(text=f"Proceso {proceso.id}: Terminado")
-        self.progress_bars[index]['value'] = 5
-        self.info_labels[index].config(
-            text=f"Prioridad: {proceso.prioridad} | Memoria: {proceso.memoria_asignada} MB | "
-                 f"Hilo: {proceso.hilo} | Núcleo: {proceso.nucleo} | "
-                 f"Tiempo estimado: {tiempo_estimado_total:.2f} s | "
-                 f"Tiempo real: {tiempo_final_acumulado:.2f} s"
+        self.labels_estados[index].config(
+            text=f"Proceso {proceso.id}: Terminado (Ciclos realizados: {proceso.ciclos_realizados})"
         )
-        
-        # Almacenar el tiempo real de ejecución para la gráfica
+        self.progress_bars[index]['value'] = 5
         proceso.tiempo_ejecucion_real = tiempo_final_acumulado
-        
-        # Actualizar la gráfica con los tiempos reales
+
+        # Incrementar el contador de procesos terminados
+        self.procesos_terminados += 1
+
+        # Si todos los procesos han terminado, actualizar la tabla y mostrarla
+        if self.procesos_terminados == len(self.procesos):
+            self.actualizar_tabla()
+
+        # Actualizar la gráfica
         self.actualizar_grafica()
 
 # Ejecutar la simulación
