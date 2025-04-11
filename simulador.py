@@ -165,63 +165,44 @@ class SimuladorProcesador:
         """
         Inicia la simulación de procesos en hilos separados
         """
+        # Ocultar el botón de iniciar
+        self.boton_iniciar.pack_forget()
+
+        # Mostrar el botón de pausa
+        self.boton_pausa.pack(pady=5)
+
         # Vacía todas las listas de control para reiniciar la simulación desde cero
         self.procesos = []
-        # Elimina todas las referencias a las etiquetas que muestran el estado de los procesos
         self.labels_estados = []
-        # Elimina todas las referencias a las barras de progreso
         self.progress_bars = []
-        # Elimina todas las referencias a las etiquetas que muestran información adicional
         self.info_labels = []
-        # Destruye el frame que contiene todos los elementos visuales de los procesos anteriores
         self.frame_estados.destroy()
-        # Crea un nuevo frame vacío para albergar los nuevos elementos visuales
         self.frame_estados = tk.Frame(self.root)
-        # Coloca el nuevo frame en la ventana con un margen interno de 10 píxeles
         self.frame_estados.pack(padx=10, pady=10)
 
-        # Crea nuevos procesos, usando la cantidad anterior o 3 por defecto si no había ninguno
+        # Crear nuevos procesos
         self.crear_procesos(len(self.procesos) or 3)
-
-        # Ordena los procesos según su prioridad, donde valores menores indican mayor prioridad
-        # La función lambda extrae el atributo "prioridad" de cada proceso para la comparación
         self.procesos.sort(key=lambda p: p.prioridad)
 
-        # Itera sobre cada proceso para crear su representación visual en la interfaz
+        # Crear representación visual de los procesos
         for proceso in self.procesos:
-            # Crea una etiqueta que muestra el ID del proceso y su estado inicial
             label = tk.Label(self.frame_estados, text=f"Proceso {proceso.id}: Estado Inicial")
-            # Coloca la etiqueta en el frame
             label.pack()
-            # Almacena la referencia a la etiqueta para actualizarla después
             self.labels_estados.append(label)
 
-            # Crea una barra de progreso para visualizar el avance del proceso
-            # length=200: ancho de 200 píxeles
-            # mode='determinate': la barra se llena gradualmente
-            # maximum=5: valor máximo que representa los 5 estados posibles
             progress = ttk.Progressbar(self.frame_estados, length=200, mode='determinate', maximum=5)
-            # Coloca la barra de progreso con un espacio vertical de 5 píxeles
             progress.pack(pady=5)
-            # Almacena la referencia a la barra para actualizarla después
             self.progress_bars.append(progress)
 
-            # Crea una etiqueta que muestra información detallada del proceso:
-            # - Prioridad asignada al proceso
-            # - Cantidad de memoria asignada en megabytes
-            # - Número de hilo asignado
-            # - Número de núcleo asignado
             info_label = tk.Label(
                 self.frame_estados,
                 text=f"Prioridad: {proceso.prioridad} | Memoria: {proceso.memoria_asignada} MB | "
                      f"Hilo: {proceso.hilo} | Núcleo: {proceso.nucleo}"
             )
-            # Coloca la etiqueta de información en el frame
             info_label.pack()
-            # Almacena la referencia a la etiqueta de información para actualizarla después
             self.info_labels.append(info_label)
 
-        # Iniciar la simulación
+        # Iniciar la simulación en hilos separados
         for i, proceso in enumerate(self.procesos):
             thread = threading.Thread(
                 target=self.simular_proceso_con_actualizacion,
@@ -234,18 +215,30 @@ class SimuladorProcesador:
         Pausa la simulación deteniendo los hilos temporalmente
         """
         self.pausa_event.clear()  # Detiene los hilos
+
+        # Ocultar el botón de pausa y mostrar el de continuar
+        self.boton_pausa.pack_forget()
+        self.boton_continuar.pack(pady=5)
+
         for i, proceso in enumerate(self.procesos):
             if proceso.estados['Ejecutando'] or proceso.estados['Bloqueado']:
                 self.labels_estados[i].config(
-                    text=f"Proceso {proceso.id}: Pausado (Ciclos realizados: {proceso.ciclo_ejecucion})"
+                    text=f"Proceso {proceso.id}: Pausado (Ciclos realizados: {proceso.ciclos_realizados})"
                 )
-        self.actualizar_grafica()  # Actualiza la gráfica en el momento de la pausa
-    
+                # El tiempo real ya se actualiza en cada ciclo, no es necesario recalcularlo aquí
+        
+        # Actualizar la gráfica al pausar
+        self.actualizar_grafica()
+
     def continuar_simulacion(self):
         """
         Continúa la simulación reanudando los hilos
         """
         self.pausa_event.set()  # Permite que los hilos continúen
+
+        # Ocultar el botón de continuar y mostrar el de pausa
+        self.boton_continuar.pack_forget()
+        self.boton_pausa.pack(pady=5)
 
     def actualizar_grafica(self):
         """
@@ -260,67 +253,49 @@ class SimuladorProcesador:
         
         ids = [proceso.id for proceso in self.procesos]
         tiempos_estimados = [proceso.tiempo_ejecucion for proceso in self.procesos]
-        
-        # Recopilar tiempos reales (usar 0 si aún no hay tiempo acumulado)
-        tiempos_reales = []
-        for proceso in self.procesos:
-            if hasattr(proceso, 'tiempo_ejecucion_real'):
-                tiempos_reales.append(proceso.tiempo_ejecucion_real)
-            else:
-                tiempos_reales.append(0)  # Si aún no tiene tiempo acumulado
-        
+        tiempos_reales = [proceso.tiempo_ejecucion_real for proceso in self.procesos]
+
         # Dibujar barras para los tiempos estimados (en azul claro)
         self.ax.bar(ids, tiempos_estimados, alpha=0.4, color='lightblue', label='Tiempo Estimado')
-        
+
         # Dibujar barras para los tiempos reales (en azul oscuro)
         self.ax.bar(ids, tiempos_reales, alpha=0.7, color='blue', label='Tiempo Ejecutado')
-        
+
         # Añadir valores encima de las barras
         for i, (est, real) in enumerate(zip(tiempos_estimados, tiempos_reales)):
-            # Mostrar tiempo estimado
             self.ax.text(ids[i], est + 0.1, f"{est:.2f}s", ha='center', va='bottom', fontsize=8)
-            
-            # Mostrar tiempo real si es > 0
             if real > 0:
-                self.ax.text(ids[i], real/2, f"{real:.2f}s", ha='center', va='center', 
-                             fontsize=8, color='white', fontweight='bold')
-                
-                # Mostrar porcentaje completado
-                porcentaje = (real / est) * 100
-                if porcentaje > 10:  # Solo mostrar si hay espacio suficiente
-                    self.ax.text(ids[i], 0.1, f"{porcentaje:.1f}%", ha='center', 
-                                va='bottom', fontsize=7, color='black')
-        
+                self.ax.text(ids[i], real / 2, f"{real:.2f}s", ha='center', va='center', fontsize=8, color='white', fontweight='bold')
+
         # Ajustar el rango del eje y para mostrar claramente todos los valores
-        max_tiempo = max(max(tiempos_estimados), max(tiempos_reales) if tiempos_reales else 0) * 1.2
+        max_tiempo = max(max(tiempos_estimados), max(tiempos_reales)) * 1.2
         self.ax.set_ylim(0, max_tiempo)
-        
+
         # Establecer ticks específicos para el eje x (solo los IDs de procesos)
         self.ax.set_xticks(ids)
-        
+
         # Añadir leyenda
         self.ax.legend(loc='upper right')
-        
+
         # Añadir cuadrícula para mejor legibilidad
         self.ax.grid(axis='y', linestyle='--', alpha=0.7)
-        
+
         # Actualizar el canvas
         self.canvas.draw()
 
     def actualizar_tabla(self):
         """
-        Actualiza la tabla con los resultados finales de los procesos
+        Actualiza la tabla con los resultados actuales de los procesos
         """
         # Limpiar la tabla antes de llenarla
         for row in self.treeview.get_children():
             self.treeview.delete(row)
 
-        # Llenar la tabla con los datos de los procesos
+        # Llenar la tabla con los datos actuales de los procesos
         for proceso in self.procesos:
             tiempo_real = getattr(proceso, 'tiempo_ejecucion_real', 0)
             self.treeview.insert(
-                "", "end",
-                values=(
+                "", "end", values=(
                     proceso.id,
                     proceso.ciclos_realizados,  # Usar ciclos realizados realmente
                     f"{proceso.tiempo_ejecucion:.2f}",
@@ -328,8 +303,9 @@ class SimuladorProcesador:
                 )
             )
 
-        # Mostrar la tabla al finalizar todas las simulaciones
-        self.treeview.pack(pady=10)
+        # Mostrar la tabla solo si todos los procesos han terminado
+        if self.procesos_terminados == len(self.procesos):
+            self.treeview.pack(pady=10)
     
     def simular_proceso_con_actualizacion(self, proceso, index):
         """
@@ -340,17 +316,17 @@ class SimuladorProcesador:
             proceso (Proceso): Proceso a simular
             index (int): Índice del proceso para actualizar etiqueta
         """
-        tiempo_final_acumulado = 0
+        if not hasattr(proceso, 'tiempo_ejecucion_real'):
+            proceso.tiempo_ejecucion_real = 0  # Inicializar si no existe
+
         tiempo_estimado_total = proceso.tiempo_ejecucion
-        
-        # Establecer un número aleatorio de ciclos entre 20 y 30
         num_ciclos = random.randint(20, 30)
         tiempo_por_ciclo = tiempo_estimado_total / num_ciclos
-        
+
         for ciclo in range(num_ciclos):
             # Pausar si el evento está detenido
             self.pausa_event.wait()
-            
+
             # Estado Ejecutando
             proceso.estados['Ejecutando'] = True
             self.labels_estados[index].config(
@@ -358,13 +334,14 @@ class SimuladorProcesador:
             )
             self.progress_bars[index]['value'] = 3
             self.root.update_idletasks()
-            
-            tiempo_actual = tiempo_por_ciclo / proceso.prioridad
+
+            # Simular tiempo de ejecución
+            tiempo_actual = (tiempo_por_ciclo / proceso.prioridad) * 1.3  # Aumentar el tiempo en un 30%
             start_time = time.time()
             time.sleep(tiempo_actual)
             tiempo_ciclo = time.time() - start_time
-            tiempo_final_acumulado += tiempo_ciclo
-            
+            proceso.tiempo_ejecucion_real += tiempo_ciclo  # Actualizar tiempo real acumulado
+
             # Incrementar el contador de ciclos realizados
             proceso.ciclos_realizados += 1
 
@@ -377,15 +354,14 @@ class SimuladorProcesador:
                 )
                 self.progress_bars[index]['value'] = 4
                 self.root.update_idletasks()
-                time.sleep(random.uniform(0.3, 1))
-        
+                time.sleep(random.uniform(0.3, 1) * 1.3)  # Aumentar el tiempo en un 30%
+
         # Estado Terminado
         proceso.estados['Terminado'] = True
         self.labels_estados[index].config(
             text=f"Proceso {proceso.id}: Terminado (Ciclos realizados: {proceso.ciclos_realizados})"
         )
         self.progress_bars[index]['value'] = 5
-        proceso.tiempo_ejecucion_real = tiempo_final_acumulado
 
         # Incrementar el contador de procesos terminados
         self.procesos_terminados += 1
